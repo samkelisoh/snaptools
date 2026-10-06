@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!-- viewport-fit=cover is REQUIRED for env(safe-area-inset-*) to resolve.
+     user-scalable=no / maximum-scale removed: it blocks pinch-zoom, which
+     Google Play's pre-launch report flags as an accessibility issue. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>SnapTools</title>
+
+<!-- Vendored locally: CDN scripts fail offline and break features silently. -->
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script src="admob-config.js"></script>
+
+<script>
+/*
+ * AdMob integration (Capacitor 8).
+ *
+ * NOTE: this is a CLASSIC script, not type="module", and it does NOT import
+ * anything from a CDN. Capacitor registers native plugins onto
+ * window.Capacitor.Plugins at runtime, so the plugin is already here.
+ *
+ * The previous version imported the plugin ESM from jsDelivr. That could
+ * never work: the requested version did not exist, and the package's entry
+ * point does `import { registerPlugin } from '@capacitor/core'` — a bare
+ * specifier no WebView can resolve. The failed top-level import silently
+ * discarded this whole script, so no ad function was ever defined.
+ */
+(function () {
+  'use strict';
+
+  // Minimum gap between interstitials. Showing one on every action is an
+  // AdMob policy violation ("ad density") and gets apps suspended.
+  var INTERSTITIAL_COOLDOWN_MS = 3 * 60 * 1000;
+  var lastInterstitialAt = 0;
+  var adMobReady = false;
+
+  function plugin() {
+    return window.Capacitor
+        && window.Capacitor.Plugins
+        && window.Capacitor.Plugins.AdMob;
+  }
+
+  function isNative() {
+    return !!(window.Capacitor
+           && typeof window.Capacitor.isNativePlatform === 'function'
+           && window.Capacitor.isNativePlatform());
+  }
+
+  async function initAdMob() {
+    var AdMob = plugin();
+    if (!AdMob) {
+      console.warn('[SnapTools] AdMob plugin not present on the bridge.');
+      return;
+    }
+    try {
+      await AdMob.initialize({
+        initializeForTesting: window.SNAPTOOLS_USE_TEST_ADS === true,
+        testingDevices: []
+      });
+      adMobReady = true;
+      console.log('[SnapTools] AdMob initialized.');
+
+      await AdMob.showBanner({
+        adId: window.SNAPTOOLS_ADMOB.BANNER_ID,
+        adSize: 'BANNER',
+        position: 'BOTTOM_CENTER',
+        margin: 0
+      });
+
+      // API 36 forces edge-to-edge, so reserve space or the banner covers
+      // the bottom of the UI.
+      document.body.classList.add('has-banner-ad');
+      console.log('[SnapTools] Banner requested.');
+    } catch (e) {
+      // Log loudly. Swallowing this is what hid the original bug.
+      console.error('[SnapTools] AdMob init/banner failed:', e);
+    }
+  }
+
+  window.showInterstitialReal = async function () {
+    var AdMob = plugin();
+    var now = Date.now();
+
+    if (!isNative() || !AdMob || !adMobReady) return false;
+    if (now - lastInterstitialAt < INTERSTITIAL_COOLDOWN_MS) {
+      console.log('[SnapTools] Interstitial suppressed (cooldown).');
+      return false;
+    }
+
+    try {
+      await AdMob.prepareInterstitial({ adId: window.SNAPTOOLS_ADMOB.INTERSTITIAL_ID });
+      await AdMob.showInterstitial();
+      lastInterstitialAt = now;
+      return true;
+    } catch (e) {
+      console.error('[SnapTools] Interstitial failed:', e);
+      return false;   // fail silently for the user; never block their action
+    }
+  };
+
+  window.showRewardedReal = async function () {
+    var AdMob = plugin();
+    if (!isNative() || !AdMob || !adMobReady) return false;
+
+    try {
+      await AdMob.prepareRewardVideoAd({ adId: window.SNAPTOOLS_ADMOB.REWARDED_ID });
+      var result = await AdMob.showRewardVideoAd();
+      return !!result;
+    } catch (e) {
+      console.error('[SnapTools] Rewarded ad failed:', e);
+      return false;
+    }
+  };
+
+  /*
+   * Rewarded-ad gate for HD export.
+   *
+   * Deliberately fails OPEN: if the ad can't load (no network, no fill,
+   * web preview), the user still gets their export. Withholding a feature
+   * because an ad failed is a bad experience and generates 1-star reviews.
+   */
+  window.unlockHdExport = async function () {
+    var granted = false;
+    try {
+      granted = await window.showRewardedReal();
+    } catch (e) {
+      console.error('[SnapTools] Rewarded gate error:', e);
+    }
+    if (!granted) {
+      console.log('[SnapTools] Rewarded ad unavailable — unlocking anyway.');
+    }
+    if (typeof window.doHdExport === 'function') window.doHdExport();
+  };
+
+  if (isNative()) {
+    document.addEventListener('DOMContentLoaded', initAdMob);
+  } else {
+    console.log('[SnapTools] Web preview — native ads skipped.');
+  }
+})();
+</script>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+/* Android 16 (API 36) makes edge-to-edge mandatory: content draws behind the
+   status and navigation bars. Pad by the safe-area insets so the header isn't
+   under the status bar and controls aren't under the gesture bar. */
+body{background:#0f1115;color:#fff;min-height:100vh;
+     padding-top:env(safe-area-inset-top,0px);
+     padding-left:env(safe-area-inset-left,0px);
+     padding-right:env(safe-area-inset-right,0px);
+     padding-bottom:env(safe-area-inset-bottom,0px)}
+/* Reserve room for the 50dp AdMob banner so it never covers the UI. */
+body.has-banner-ad{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 50px)}
+.header{background:linear-gradient(135deg,#6a5cff 0%,#a855f7 100%);padding:28px 20px 22px;border-radius:0 0 28px 28px;text-align:center;position:relative;overflow:hidden}
+.header::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle,rgba(255,255,255,.15) 0%,transparent 60%);pointer-events:none}
+.header h1{font-size:26px;font-weight:900;letter-spacing:-.5px;position:relative}
+.header p{opacity:.9;font-size:13px;margin-top:6px;position:relative}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 16px}
+.card{background:#1c1f2a;border:1px solid #252a36;border-radius:20px;padding:16px;cursor:pointer;transition:.15s;position:relative;overflow:hidden}
+.card:active{transform:scale(.96);border-color:#6a5cff}
+.card .icon{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px}
+.card h3{font-size:14px;font-weight:800;margin-top:12px}
+.card p{font-size:11px;color:#8b95a5;margin-top:3px}
+.card .tag{position:absolute;top:12px;right:12px;font-size:8px;font-weight:900;padding:4px 8px;border-radius:20px;letter-spacing:.5px}
+.tag.off{background:#f59e0b;color:#000}
+.view{display:none;min-height:100vh;padding-bottom:90px}
+.view.active{display:block}
+.view-head{padding:16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #1c1f2a;position:sticky;top:0;background:#0f1115;z-index:5}
+.view-head button{background:#1c1f2a;border:1px solid #252a36;color:#fff;padding:8px 14px;border-radius:10px;font-size:12px;font-weight:700}
+.content{padding:20px 16px}
+input,select{width:100%;padding:14px 16px;border-radius:14px;border:1px solid #252a36;background:#1c1f2a;color:#fff;font-size:14px;margin-top:12px;outline:none}
+input:focus,select:focus{border-color:#6a5cff}
+input[type=range]{padding:0;border:none;background:transparent;margin-top:0}
+input[type=checkbox]{width:auto;margin:0}
+.btn{width:100%;padding:16px;border-radius:14px;border:none;background:linear-gradient(135deg,#6a5cff,#a855f7);color:#fff;font-weight:800;font-size:14px;margin-top:14px;cursor:pointer}
+.btn.sec{background:#1c1f2a;border:1px solid #252a36;color:#fff}
+.btn.sm{padding:11px;font-size:12px;margin-top:10px}
+.row{display:flex;gap:10px}
+.row>*{flex:1}
+.preview{margin-top:16px;background:#1c1f2a;border:1px solid #252a36;border-radius:16px;overflow:hidden;min-height:180px;display:flex;align-items:center;justify-content:center;position:relative;padding:8px}
+.preview img{max-width:100%;max-height:420px;display:block;border-radius:8px}
+.slider{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:12px;color:#8b95a5}
+.slider span:last-child{min-width:46px;text-align:right;color:#fff;font-weight:700}
+.slider input{flex:1}
+.chk{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:13px}
+.small{font-size:11px;color:#6b7280;line-height:1.5;margin-top:10px}
+.sect{padding:16px 16px 0;font-size:12px;font-weight:800;letter-spacing:.8px;color:#6b7280}
+#toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%) translateY(20px);background:#252a36;border:1px solid #39404f;color:#fff;font-size:12px;font-weight:700;padding:11px 18px;border-radius:24px;opacity:0;pointer-events:none;transition:.25s;z-index:200;max-width:86%;text-align:center}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- HOME -->
+<div class="view active" id="homeView">
+  <div class="header">
+    <h1>🌍 SnapTools</h1>
+    <p>Everyday tools that work offline</p>
+  </div>
+
+  <div class="sect">IMAGE &amp; DOCUMENT</div>
+  <div class="grid">
+    <div class="card" onclick="openView('bgView')">
+      <div class="icon" style="background:#6a5cff20">✂️</div>
+      <h3>BG Remover</h3>
+      <p>Cut out a subject</p>
+    </div>
+    <div class="card" onclick="openView('scanView')">
+      <div class="icon" style="background:#22c55e20">📄</div>
+      <h3>Doc Scanner</h3>
+      <p>Photos → one PDF</p>
+    </div>
+    <div class="card" onclick="openView('qrView')">
+      <div class="icon" style="background:#f59e0b20">🔳</div>
+      <h3>QR Tools</h3>
+      <p>Create &amp; read</p>
+    </div>
+    <div class="card" onclick="openView('enhanceView')">
+      <div class="icon" style="background:#ec489920">✨</div>
+      <h3>Enhance Photo</h3>
+      <p>Fix &amp; sharpen</p>
+    </div>
+  </div>
+
+  <div class="sect">EVERYDAY</div>
+  <div class="grid">
+    <div class="card" onclick="openView('convertView')">
+      <span class="tag off">OFFLINE</span>
+      <div class="icon" style="background:#06b6d420">🔄</div>
+      <h3>Unit Convert</h3>
+      <p>7 categories</p>
+    </div>
+    <div class="card" onclick="openView('cashView')">
+      <span class="tag off">OFFLINE</span>
+      <div class="icon" style="background:#8b5cf620">💰</div>
+      <h3>CashBook</h3>
+      <p>Track money in &amp; out</p>
+    </div>
+  </div>
+
+  <div style="margin:18px 16px;background:#1c1f2a;border:1px solid #252a36;border-radius:16px;padding:16px">
+    <div style="font-size:13px;font-weight:800">🔒 Your files stay on your phone</div>
+    <div class="small">Every tool runs entirely on this device. Nothing you open,
+      scan or save is uploaded to any server.</div>
+  </div>
+</div>
+
+<!-- BG REMOVER -->
+<div class="view" id="bgView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>Background Remover</b></div>
+  <div class="content">
+    <input type="file" id="bgInput" accept="image/*">
+    <div class="preview" id="bgPreview"><span style="color:#5a6577;font-size:13px">Choose a photo</span></div>
+
+    <div class="slider">
+      <span>Tolerance</span>
+      <input type="range" id="bgTol" min="10" max="120" value="45">
+      <span id="bgTolVal">45</span>
+    </div>
+    <div class="small">Works best on a plain, evenly-lit background. Raise the
+      tolerance if parts of the background remain; lower it if edges of your
+      subject are being eaten.</div>
+
+    <button class="btn" onclick="runRemoveBG()">✂️ Remove background</button>
+    <button class="btn sec" id="bgSave" style="display:none" onclick="saveBG()">⬇️ Save PNG (transparent)</button>
+  </div>
+</div>
+
+<!-- DOC SCANNER -->
+<div class="view" id="scanView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>Document Scanner</b></div>
+  <div class="content">
+    <input type="file" id="scanInput" accept="image/*" capture="environment">
+    <div class="chk">
+      <input type="checkbox" id="scanEnhance" checked>
+      <label for="scanEnhance">Clean up page (grayscale + contrast)</label>
+    </div>
+    <div style="margin-top:12px;font-size:12px;color:#8b95a5" id="scanCount"></div>
+    <div class="preview" id="scanPreview"></div>
+    <input type="text" id="scanName" placeholder="File name" value="SnapTools-Scan">
+    <button class="btn" onclick="makePDF()">📄 Save as PDF</button>
+    <button class="btn sec sm" onclick="clearScan()">Clear all pages</button>
+    <div class="small">Add as many pages as you like — they're combined into a
+      single A4 PDF, each page scaled to fit without distortion.</div>
+  </div>
+</div>
+
+<!-- QR -->
+<div class="view" id="qrView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>QR Tools</b></div>
+  <div class="content">
+    <input type="text" id="qrText" placeholder="Link, text, phone number…" value="https://example.com">
+    <select id="qrEcc">
+      <option value="L">Error correction: Low (densest)</option>
+      <option value="M" selected>Error correction: Medium</option>
+      <option value="Q">Error correction: Quartile</option>
+      <option value="H">Error correction: High (survives damage)</option>
+    </select>
+    <button class="btn" onclick="genQR()">Generate QR code</button>
+    <div class="preview" id="qrPreview"><span style="color:#5a6577">Your QR code appears here</span></div>
+    <button class="btn sec" id="qrSave" style="display:none" onclick="saveQR()">⬇️ Save PNG</button>
+
+    <div style="height:1px;background:#252a36;margin:22px 0"></div>
+
+    <div style="font-size:13px;font-weight:800">Read a QR code</div>
+    <input type="file" id="qrScanInput" accept="image/*" capture="environment">
+    <div id="qrScanResult" style="display:none;word-break:break-all;background:#1c1f2a;border:1px solid #252a36;border-radius:12px;padding:14px;margin-top:12px;font-size:13px"></div>
+  </div>
+</div>
+
+<!-- ENHANCE -->
+<div class="view" id="enhanceView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>Enhance Photo</b></div>
+  <div class="content">
+    <input type="file" id="enhInput" accept="image/*">
+    <div class="preview" id="enhPreview"><span style="color:#5a6577">Choose a photo</span></div>
+
+    <div class="chk">
+      <input type="checkbox" id="autoLevels" onchange="applyEnhance()">
+      <label for="autoLevels">Auto levels (fix dull / colour-cast photos)</label>
+    </div>
+    <div class="slider"><span>Bright</span><input type="range" id="bright" min="20" max="200" value="100" oninput="applyEnhance()"><span id="bVal">100%</span></div>
+    <div class="slider"><span>Contrast</span><input type="range" id="contrast" min="20" max="200" value="100" oninput="applyEnhance()"><span id="cVal">100%</span></div>
+    <div class="slider"><span>Colour</span><input type="range" id="sat" min="0" max="200" value="100" oninput="applyEnhance()"><span id="sVal">100%</span></div>
+    <div class="slider"><span>Sharpen</span><input type="range" id="sharp" min="0" max="100" value="0" oninput="applyEnhance()"><span id="shVal">0%</span></div>
+
+    <button class="btn" onclick="unlockHdExport()">⬇️ Save full-resolution photo</button>
+    <button class="btn sec sm" onclick="resetEnhance()">Reset</button>
+    <div class="small">The preview is downscaled so the sliders stay smooth. Saving
+      re-renders at full resolution.</div>
+  </div>
+</div>
+
+<!-- CONVERTER -->
+<div class="view" id="convertView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>Unit Converter</b></div>
+  <div class="content">
+    <select id="uCat" onchange="fillUnits()">
+      <option>Length</option><option>Mass</option><option>Volume</option>
+      <option>Area</option><option>Speed</option><option>Temperature</option>
+      <option>Data</option><option>Currency</option>
+    </select>
+    <input type="number" id="uInput" value="100" oninput="doConvert()">
+    <div class="row">
+      <select id="uFrom" onchange="doConvert()"></select>
+      <select id="uTo" onchange="doConvert()"></select>
+    </div>
+    <button class="btn sec sm" onclick="swapUnits()">⇅ Swap</button>
+    <div style="background:#1c1f2a;border:1px solid #252a36;border-radius:14px;padding:20px;text-align:center;margin-top:14px;font-size:26px;font-weight:900;word-break:break-all" id="uResult">—</div>
+
+    <div id="currNote" style="display:none">
+      <div class="slider" style="margin-top:18px">
+        <span>SZL/ZAR per USD</span>
+        <input type="number" id="usdRate" value="18" step="0.01" style="margin:0" oninput="doConvert()">
+      </div>
+      <div class="small"><b>Offline rate.</b> SnapTools works without internet, so
+        it cannot fetch live exchange rates. SZL is pegged 1:1 to ZAR. Set the
+        USD rate yourself and update it when it moves — do not rely on this for
+        trading or large transfers.</div>
+    </div>
+  </div>
+</div>
+
+<!-- CASHBOOK -->
+<div class="view" id="cashView">
+  <div class="view-head"><button onclick="goHome()">← Back</button><b>CashBook</b></div>
+  <div class="content">
+    <div style="background:#1c1f2a;border:1px solid #252a36;border-radius:14px;padding:14px">
+      <div style="font-size:11px;font-weight:800;color:#6b7280;letter-spacing:.6px">BALANCE</div>
+      <div id="cbTotals" style="margin-top:6px;font-size:16px"></div>
+    </div>
+
+    <input type="text" id="cbDesc" placeholder="What was it for?">
+    <div class="row">
+      <select id="cbType"><option value="in">Money in</option><option value="out">Money out</option></select>
+      <select id="cbCur"><option>SZL</option><option>ZAR</option><option>USD</option></select>
+    </div>
+    <input type="number" id="cbAmt" placeholder="Amount" step="0.01">
+    <button class="btn" onclick="addEntry()">＋ Add entry</button>
+
+    <div id="cbList" style="margin-top:18px"></div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn sec sm" onclick="exportLedger()">⬇️ Export CSV</button>
+      <button class="btn sec sm" onclick="clearLedger()">Clear all</button>
+    </div>
+    <div class="small">Saved only on this phone. Export a CSV backup before
+      reinstalling the app or clearing app data.</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js"></script>
+<script>
+  // Live label for the tolerance slider.
+  document.getElementById('bgTol').addEventListener('input', function () {
+    document.getElementById('bgTolVal').textContent = this.value;
+  });
+</script>
+</body>
+</html>

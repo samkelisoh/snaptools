@@ -1,0 +1,17 @@
+{
+  "name": "snaptools",
+  "version": "1.0.0",
+  "description": "SnapTools - Global AI Toolkit",
+  "main": "index.js",
+  "scripts": {
+    "build": "echo build"
+  },
+  "dependencies": {
+    "@capacitor-community/admob": "^8.2.0",
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.2"
+  }
+}
